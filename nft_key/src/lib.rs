@@ -1,11 +1,8 @@
 use lib::{
-    chain_key::{ext_chain_key_token_approval_receiver, ChainKeyToken, ChainKeyTokenApproval},
-    signer::{ext_signer, SignRequest, SignResult},
-    Rejectable,
+    chain_key::{ext_chain_key_token_approval_receiver, ChainKeyToken, ChainKeyTokenApproval}, signer::{ext_signer, SignRequest, SignResult}, utils::assert_gt_one_yocto_near, Rejectable
 };
 use near_sdk::{
-    assert_one_yocto, collections::UnorderedMap, env, near, require, AccountId, AccountIdRef,
-    BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseError, PromiseOrValue, PublicKey,
+    assert_one_yocto, collections::UnorderedMap, env, near, require, AccountId, AccountIdRef, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, PublicKey
 };
 use near_sdk_contract_tools::hook::Hook;
 #[allow(clippy::wildcard_imports)]
@@ -126,7 +123,7 @@ impl ChainKeyToken for NftKeyContract {
         payload: Vec<u8>,
         approval_id: Option<u32>,
     ) -> PromiseOrValue<String> {
-        assert_one_yocto();
+        assert_gt_one_yocto_near();
 
         let id = token_id.parse().expect_or_reject("Invalid token ID");
         let path = path.unwrap_or_default();
@@ -151,6 +148,7 @@ impl ChainKeyToken for NftKeyContract {
 
         PromiseOrValue::Promise(
             ext_signer::ext(self.signer_contract_id.clone())
+                .with_attached_deposit(env::attached_deposit())
                 .sign(SignRequest::new(
                     payload.try_into().unwrap(),
                     make_path_string(&token_id, &path),
@@ -190,17 +188,21 @@ fn make_path_string(token_id: &str, path: &str) -> String {
 #[near]
 impl NftKeyContract {
     const SIGN_CALLBACK_GAS: Gas = Gas::from_tgas(3);
-
     #[private]
     #[must_use]
     pub fn sign_callback(
         &self,
         #[callback_result] result: Result<SignResult, PromiseError>,
-    ) -> String {
-        let mpc_signature = result.unwrap();
-        let ethers_signature: ethers_core::types::Signature =
-            mpc_signature.try_into().unwrap_or_reject();
-        ethers_signature.to_string()
+    ) -> SignResult {
+        let deposit = env::attached_deposit();
+        let predecessor = env::predecessor_account_id();
+
+        // TODO: this is probably wrong and we should refund the amount that wasn't used
+        if deposit > NearToken::from_yoctonear(0) {
+            Promise::new(predecessor).transfer(deposit);
+        }
+
+        result.unwrap()
     }
 
     #[private]

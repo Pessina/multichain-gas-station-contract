@@ -7,6 +7,7 @@ pub mod kdf;
 pub mod oracle;
 pub mod pyth;
 pub mod signer;
+pub mod utils;
 
 pub trait Rejectable<T> {
     fn unwrap_or_reject(self) -> T;

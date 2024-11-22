@@ -17,7 +17,7 @@ use lib::{
     kdf::get_mpc_address,
     oracle::{decode_pyth_price_id, PYTH_PRICE_ID_ETH_USD, PYTH_PRICE_ID_NEAR_USD},
     pyth,
-    signer::SignResult,
+    signer::{SerializableAffinePoint, SerializableScalar, SignResult},
 };
 use near_sdk::{json_types::U128, serde::Deserialize, serde_json::json};
 use near_workspaces::{
@@ -874,8 +874,13 @@ fn test_derive_new_mpc() {
     let sighash = tx.sighash().to_fixed_bytes();
 
     let mpc_signature = SignResult {
-        big_r_hex: "03DAE1E75B650ABC6AD22C899FC4245A9F58E323320B7380872C1813A7DCEB0F95".to_string(),
-        s_hex: "3FD2BC8430EC146E6D1B0EC64FE80EEDC0C483B95C8247FDFC5ADFC459BB3096".to_string(),
+        big_r: SerializableAffinePoint {
+            affine_point: "025C7B013C647110F0853304B525E553A2121074FEA8C405E13ABBDD93261311CD".to_string(),
+        },
+        s: SerializableScalar {
+            scalar: "579150C7616614777E7B711C2501CD2CE9E9064F2C11389BF3B9B3C4DEDA6F20".to_string(),
+        },
+        recovery_id: 1,
     };
 
     let sig: ethers_core::types::Signature = mpc_signature.try_into().unwrap();
