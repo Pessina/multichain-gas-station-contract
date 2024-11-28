@@ -229,7 +229,7 @@ impl NftKeyContract {
 
     fn require_is_token_owner(&self, predecessor: &AccountId, token_id: &TokenId) {
         let actual_owner = Nep171Controller::token_owner(self, token_id);
-        require!(actual_owner.as_ref() == Some(predecessor), "Unauthorized");
+        require!(actual_owner.as_ref() == Some(predecessor), "Unauthorized only the token owner can perform this action");
     }
 
     fn approve(&mut self, token_id: u32, account_id: &AccountId) -> u32 {
