@@ -111,6 +111,20 @@ impl NftKeyContract {
 
         id
     }
+
+    #[private]
+    pub fn ckt_revoke_all_unchecked(&mut self, token_id: TokenId) -> near_sdk::json_types::U64 {
+        let id: u32 = token_id.parse().expect_or_reject("Invalid token ID");
+        let Some(mut key_data) = self.key_data.get(&id) else {
+            return 0.into();
+        };
+
+        let len = key_data.approvals.len();
+        key_data.approvals.clear();
+        self.key_data.insert(&id, &key_data);
+
+        len.into()
+    }
 }
 
 #[near]
@@ -197,7 +211,7 @@ impl NftKeyContract {
         let deposit = env::attached_deposit();
         let predecessor = env::predecessor_account_id();
 
-        // TODO: this is probably wrong and we should refund the amount that wasn't used
+        // TODO: refund only amount not used (signer contract should return the amount used)
         if deposit > NearToken::from_yoctonear(0) {
             Promise::new(predecessor).transfer(deposit);
         }
@@ -332,17 +346,7 @@ impl ChainKeyTokenApproval for NftKeyContract {
         assert_one_yocto();
         let predecessor = env::predecessor_account_id();
         self.require_is_token_owner(&predecessor, &token_id);
-
-        let id: u32 = token_id.parse().expect_or_reject("Invalid token ID");
-        let Some(mut key_data) = self.key_data.get(&id) else {
-            return 0.into();
-        };
-
-        let len = key_data.approvals.len();
-        key_data.approvals.clear();
-        self.key_data.insert(&id, &key_data);
-
-        len.into()
+        self.ckt_revoke_all_unchecked(token_id)
     }
 
     fn ckt_approval_id_for(&self, token_id: TokenId, account_id: AccountId) -> Option<u32> {
@@ -360,14 +364,8 @@ impl Hook<NftKeyContract, Nep171Transfer<'_>> for NftKeyContract {
         transfer: &Nep171Transfer<'_>,
         f: impl FnOnce(&mut NftKeyContract) -> R,
     ) -> R {
-        // TODO: We should re-use code instead of duplicate from ckt_revoke_all
-        let id: u32 = transfer.token_id.parse().expect_or_reject("Invalid token ID");
-        let Some(mut key_data) = contract.key_data.get(&id) else {
-            return f(contract);
-        };
-
-        key_data.approvals.clear();
-        contract.key_data.insert(&id, &key_data);
+        // It should not check for ownership here, because the caller can be the owner or an approved account
+        contract.ckt_revoke_all_unchecked(transfer.token_id.clone());
 
         f(contract)
     }
