@@ -360,7 +360,15 @@ impl Hook<NftKeyContract, Nep171Transfer<'_>> for NftKeyContract {
         transfer: &Nep171Transfer<'_>,
         f: impl FnOnce(&mut NftKeyContract) -> R,
     ) -> R {
-        contract.ckt_revoke_all(transfer.token_id.clone());
+        // TODO: We should re-use code instead of duplicate from ckt_revoke_all
+        let id: u32 = transfer.token_id.parse().expect_or_reject("Invalid token ID");
+        let Some(mut key_data) = contract.key_data.get(&id) else {
+            return f(contract);
+        };
+
+        key_data.approvals.clear();
+        contract.key_data.insert(&id, &key_data);
+
         f(contract)
     }
 }

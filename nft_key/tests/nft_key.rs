@@ -391,3 +391,128 @@ async fn test_nft_key_sub_path() {
         "signatures from different key paths should be different",
     );
 }
+
+#[tokio::test]
+async fn test_transfer_with_approval() {
+    let w = near_workspaces::sandbox().await.unwrap();
+
+    let (nft_key, alice, bob) = tokio::join!(
+        async {
+            w.dev_deploy(&near_workspaces::compile_project("./").await.unwrap())
+                .await
+                .unwrap()
+        },
+        async { w.dev_create_account().await.unwrap() },
+        async { w.dev_create_account().await.unwrap() },
+    );
+
+    println!("{:<16} {}", "Alice:", alice.id());
+    println!("{:<16} {}", "Bob:", bob.id());
+    println!("{:<16} {}", "NFT Key:", nft_key.id());
+
+    println!("Initializing the contract...");
+
+    nft_key
+        .call("new")
+        .args_json(json!({
+            "signer_contract_id": "dev-20241128074653-60053090170527",
+        }))
+        .transact()
+        .await
+        .unwrap()
+        .unwrap();
+
+    println!("Initialization complete.");
+    println!("Registering for storage...");
+
+    tokio::join!(
+        async {
+            alice
+                .call(nft_key.id(), "storage_deposit")
+                .args_json(json!({}))
+                .deposit(NearToken::from_near(1))
+                .transact()
+                .await
+                .unwrap()
+                .unwrap();
+        },
+        async {
+            bob.call(nft_key.id(), "storage_deposit")
+                .args_json(json!({}))
+                .deposit(NearToken::from_near(1))
+                .transact()
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    );
+
+    println!("Finished registering for storage.");
+
+    let token_id = alice
+        .call(nft_key.id(), "mint")
+        .args_json(json!({}))
+        .max_gas()
+        .transact()
+        .await
+        .unwrap()
+        .json::<u32>()
+        .unwrap()
+        .to_string();
+
+    println!("Minted token {token_id}");
+
+    let token: Token = nft_key
+        .view("nft_token")
+        .args_json(json!({ "token_id": token_id }))
+        .await
+        .unwrap()
+        .json()
+        .unwrap();
+
+    println!("Initial token: {token:?}");
+    assert_eq!(token.owner_id.to_string(), alice.id().to_string());
+
+    println!("Alice approving Bob...");
+
+    alice
+        .call(nft_key.id(), "nft_approve")
+        .args_json(json!({
+            "token_id": token_id,
+            "account_id": bob.id(),
+        }))
+        .deposit(NearToken::from_yoctonear(1))
+        .max_gas()
+        .transact()
+        .await
+        .unwrap()
+        .unwrap();
+
+    println!("Bob transferring token to himself...");
+
+    bob.call(nft_key.id(), "nft_transfer")
+        .args_json(json!({
+            "receiver_id": bob.id(),
+            "token_id": token_id,
+            "approval_id": 0,
+        }))
+        .deposit(NearToken::from_yoctonear(1))
+        .max_gas()
+        .transact()
+        .await
+        .unwrap()
+        .unwrap();
+
+    println!("Transfer complete.");
+
+    let token: Token = nft_key
+        .view("nft_token")
+        .args_json(json!({ "token_id": token_id }))
+        .await
+        .unwrap()
+        .json()
+        .unwrap();
+
+    println!("Final token: {token:?}");
+    assert_eq!(token.owner_id.to_string(), bob.id().to_string());
+}
