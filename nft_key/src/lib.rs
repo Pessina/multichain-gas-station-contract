@@ -157,7 +157,7 @@ impl ChainKeyToken for NftKeyContract {
                     .get(&env::predecessor_account_id())
                     .zip(approval_id)
                     .map_or(false, |(actual, expected)| actual == expected),
-            "Unauthorized",
+            "Unauthorized: Caller must be token owner or have valid approval",
         );
 
         PromiseOrValue::Promise(
