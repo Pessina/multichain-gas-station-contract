@@ -1,11 +1,8 @@
 use lib::{
-    chain_key::{ext_chain_key_token_approval_receiver, ChainKeyToken, ChainKeyTokenApproval},
-    signer::{ext_signer, SignRequest, SignResult},
-    Rejectable,
+    chain_key::{ext_chain_key_token_approval_receiver, ChainKeyToken, ChainKeyTokenApproval}, signer::{ext_signer, SignRequest, SignResult}, utils::assert_gt_one_yocto_near, Rejectable
 };
 use near_sdk::{
-    assert_one_yocto, collections::UnorderedMap, env, near, require, AccountId, AccountIdRef,
-    BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseError, PromiseOrValue, PublicKey,
+    assert_one_yocto, collections::UnorderedMap, env, near, require, AccountId, AccountIdRef, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, PublicKey
 };
 use near_sdk_contract_tools::hook::Hook;
 #[allow(clippy::wildcard_imports)]
@@ -114,6 +111,20 @@ impl NftKeyContract {
 
         id
     }
+
+    #[private]
+    pub fn ckt_revoke_all_unchecked(&mut self, token_id: TokenId) -> near_sdk::json_types::U64 {
+        let id: u32 = token_id.parse().expect_or_reject("Invalid token ID");
+        let Some(mut key_data) = self.key_data.get(&id) else {
+            return 0.into();
+        };
+
+        let len = key_data.approvals.len();
+        key_data.approvals.clear();
+        self.key_data.insert(&id, &key_data);
+
+        len.into()
+    }
 }
 
 #[near]
@@ -126,7 +137,7 @@ impl ChainKeyToken for NftKeyContract {
         payload: Vec<u8>,
         approval_id: Option<u32>,
     ) -> PromiseOrValue<String> {
-        assert_one_yocto();
+        assert_gt_one_yocto_near();
 
         let id = token_id.parse().expect_or_reject("Invalid token ID");
         let path = path.unwrap_or_default();
@@ -146,11 +157,12 @@ impl ChainKeyToken for NftKeyContract {
                     .get(&env::predecessor_account_id())
                     .zip(approval_id)
                     .map_or(false, |(actual, expected)| actual == expected),
-            "Unauthorized",
+            "Unauthorized: Caller must be token owner or have valid approval",
         );
 
         PromiseOrValue::Promise(
             ext_signer::ext(self.signer_contract_id.clone())
+                .with_attached_deposit(env::attached_deposit())
                 .sign(SignRequest::new(
                     payload.try_into().unwrap(),
                     make_path_string(&token_id, &path),
@@ -190,17 +202,21 @@ fn make_path_string(token_id: &str, path: &str) -> String {
 #[near]
 impl NftKeyContract {
     const SIGN_CALLBACK_GAS: Gas = Gas::from_tgas(3);
-
     #[private]
     #[must_use]
     pub fn sign_callback(
         &self,
         #[callback_result] result: Result<SignResult, PromiseError>,
-    ) -> String {
-        let mpc_signature = result.unwrap();
-        let ethers_signature: ethers_core::types::Signature =
-            mpc_signature.try_into().unwrap_or_reject();
-        ethers_signature.to_string()
+    ) -> SignResult {
+        let deposit = env::attached_deposit();
+        let predecessor = env::predecessor_account_id();
+
+        // TODO: refund only amount not used (signer contract should return the amount used)
+        if deposit > NearToken::from_yoctonear(0) {
+            Promise::new(predecessor).transfer(deposit);
+        }
+
+        result.unwrap()
     }
 
     #[private]
@@ -227,7 +243,7 @@ impl NftKeyContract {
 
     fn require_is_token_owner(&self, predecessor: &AccountId, token_id: &TokenId) {
         let actual_owner = Nep171Controller::token_owner(self, token_id);
-        require!(actual_owner.as_ref() == Some(predecessor), "Unauthorized");
+        require!(actual_owner.as_ref() == Some(predecessor), "Unauthorized only the token owner can perform this action");
     }
 
     fn approve(&mut self, token_id: u32, account_id: &AccountId) -> u32 {
@@ -330,17 +346,7 @@ impl ChainKeyTokenApproval for NftKeyContract {
         assert_one_yocto();
         let predecessor = env::predecessor_account_id();
         self.require_is_token_owner(&predecessor, &token_id);
-
-        let id: u32 = token_id.parse().expect_or_reject("Invalid token ID");
-        let Some(mut key_data) = self.key_data.get(&id) else {
-            return 0.into();
-        };
-
-        let len = key_data.approvals.len();
-        key_data.approvals.clear();
-        self.key_data.insert(&id, &key_data);
-
-        len.into()
+        self.ckt_revoke_all_unchecked(token_id)
     }
 
     fn ckt_approval_id_for(&self, token_id: TokenId, account_id: AccountId) -> Option<u32> {
@@ -358,7 +364,9 @@ impl Hook<NftKeyContract, Nep171Transfer<'_>> for NftKeyContract {
         transfer: &Nep171Transfer<'_>,
         f: impl FnOnce(&mut NftKeyContract) -> R,
     ) -> R {
-        contract.ckt_revoke_all(transfer.token_id.clone());
+        // It should not check for ownership here, because the caller can be the owner or an approved account
+        contract.ckt_revoke_all_unchecked(transfer.token_id.clone());
+
         f(contract)
     }
 }

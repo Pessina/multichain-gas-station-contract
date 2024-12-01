@@ -7,7 +7,6 @@ use ethers_core::{
             group::GroupEncoding,
             ops::Reduce,
             point::{AffineCoordinates, DecompressPoint},
-            PrimeField,
         },
         AffinePoint, Secp256k1,
     },
@@ -36,11 +35,22 @@ impl SignRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[near(serializers = [json, borsh])]
+pub struct SerializableAffinePoint {
+    pub affine_point: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[near(serializers = [json, borsh])]
+pub struct SerializableScalar {
+    pub scalar: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[near(serializers = [json, borsh])]
 pub struct SignResult {
-    #[serde(rename = "big_r")]
-    pub big_r_hex: String,
-    #[serde(rename = "s")]
-    pub s_hex: String,
+    pub big_r: SerializableAffinePoint,
+    pub s: SerializableScalar,
+    pub recovery_id: u8,
 }
 
 #[allow(clippy::ptr_arg)]
@@ -65,8 +75,13 @@ impl SignResult {
         ))?;
 
         Some(Self {
-            big_r_hex: hex::encode(big_r.to_bytes()),
-            s_hex: hex::encode(s),
+            big_r: SerializableAffinePoint {
+                affine_point: hex::encode(big_r.to_bytes()),
+            },
+            s: SerializableScalar {
+                scalar: hex::encode(s),
+            },
+            recovery_id: v.to_byte(),
         })
     }
 
@@ -94,19 +109,17 @@ pub enum SignResultDecodeError {
 impl TryFrom<SignResult> for ethers_core::types::Signature {
     type Error = SignResultDecodeError;
 
-    fn try_from(SignResult { big_r_hex, s_hex }: SignResult) -> Result<Self, Self::Error> {
+    fn try_from(SignResult { big_r, s, recovery_id }: SignResult) -> Result<Self, Self::Error> {
         let big_r = Option::<AffinePoint>::from(AffinePoint::from_bytes(
-            hex::decode(big_r_hex)?[..].into(),
+            hex::decode(big_r.affine_point)?[..].into(),
         ))
         .ok_or(SignResultDecodeError::InvalidSignatureData)?;
-        let s = hex::decode(s_hex)?;
+        let s = hex::decode(s.scalar)?;
 
         let r = <k256::Scalar as Reduce<<Secp256k1 as elliptic_curve::Curve>::Uint>>::reduce_bytes(
             &big_r.x(),
         );
-        let x_is_reduced = r.to_repr() != big_r.x();
-
-        let v = RecoveryId::new(big_r.y_is_odd().into(), x_is_reduced);
+        let v = RecoveryId::from_byte(recovery_id).ok_or(SignResultDecodeError::InvalidSignatureData)?;
 
         Ok(ethers_core::types::Signature {
             r: r.to_bytes().as_slice().into(),
